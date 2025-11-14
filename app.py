@@ -38,7 +38,13 @@ TRANSFORMER_STAGE_LABELS = [
     "GeLU",
     "AllReduce (attention)",
     "AllReduce (ffn)",
+    "FlashAttention-3",
 ]
+
+ATTENTION_KERNEL_OPTIONS = {
+    "Standard matmul + softmax": "standard",
+    "FlashAttention-3": "flash-attention-3",
+}
 
 
 def resolve_module_name(target, registry: Dict[str, object]) -> str:
@@ -144,6 +150,7 @@ def run_transformer_prefill(
     seq_len: int,
     data_type_key: str,
     system: System,
+    attention_kernel: str,
 ) -> Tuple[float, List[Tuple[str, float]]]:
     data_type = data_type_dict[data_type_key]
     model = TransformerBlockInitComputationTP(
@@ -151,6 +158,7 @@ def run_transformer_prefill(
         n_heads=n_heads,
         device_count=device_count,
         data_type=data_type,
+        attention_kernel=attention_kernel,
     )
     _ = model(Tensor([batch_size, seq_len, d_model], data_type))
     latency = model.roofline_model(system)
@@ -167,6 +175,7 @@ def run_transformer_decode(
     kv_seq_len: int,
     data_type_key: str,
     system: System,
+    attention_kernel: str,
 ) -> Tuple[float, List[Tuple[str, float]]]:
     data_type = data_type_dict[data_type_key]
     model = TransformerBlockAutoRegressionTP(
@@ -174,6 +183,7 @@ def run_transformer_decode(
         n_heads=n_heads,
         device_count=device_count,
         data_type=data_type,
+        attention_kernel=attention_kernel,
     )
     _ = model(Tensor([batch_size, 1, d_model], data_type), kv_seq_len)
     latency = model.roofline_model(system)
@@ -293,6 +303,10 @@ default_dtype_index = (
 data_type_choice = st.selectbox(
     "Numerical precision", data_type_options, index=default_dtype_index
 )
+attention_choice_label = st.selectbox(
+    "Attention kernel", list(ATTENTION_KERNEL_OPTIONS.keys())
+)
+attention_kernel = ATTENTION_KERNEL_OPTIONS[attention_choice_label]
 
 def validate_transformer_inputs(
     *, d_model: int, n_heads: int, device_count: int
@@ -339,15 +353,16 @@ if software_choice == "Transformer (prefill)":
         for value in sweep_values:
             current_batch = value if sweep_param == "Batch size" else batch_size
             current_seq = value if sweep_param == "Sequence length" else seq_len
-            latency, breakdown = run_transformer_prefill(
-                d_model=int(d_model),
-                n_heads=int(n_heads),
-                device_count=int(tp_devices),
-                batch_size=int(current_batch),
-                seq_len=int(current_seq),
-                data_type_key=data_type_choice,
-                system=system,
-            )
+                latency, breakdown = run_transformer_prefill(
+                    d_model=int(d_model),
+                    n_heads=int(n_heads),
+                    device_count=int(tp_devices),
+                    batch_size=int(current_batch),
+                    seq_len=int(current_seq),
+                    data_type_key=data_type_choice,
+                    system=system,
+                    attention_kernel=attention_kernel,
+                )
             results.append(
                 {
                     "batch_size": current_batch,
@@ -427,6 +442,7 @@ else:
                 kv_seq_len=int(current_kv),
                 data_type_key=data_type_choice,
                 system=system,
+                attention_kernel=attention_kernel,
             )
             results.append(
                 {
