@@ -1,8 +1,23 @@
 import argparse
+import sys
+from pathlib import Path
 
-from hardware_model.device import device_dict
-from software_model.flash_attention import FlashAttention3
-from software_model.utils import Tensor, data_type_dict
+
+def _ensure_repo_on_path() -> None:
+    """Allow running the script directly without ``python -m``."""
+
+    repo_root = Path(__file__).resolve().parents[3]
+    repo_root_str = str(repo_root)
+    if repo_root_str not in sys.path:
+        sys.path.insert(0, repo_root_str)
+
+
+_ensure_repo_on_path()
+
+
+from hardware_model.device import device_dict  # noqa: E402
+from software_model.flash_attention import FlashAttention3  # noqa: E402
+from software_model.utils import Tensor, data_type_dict  # noqa: E402
 
 
 if __name__ == "__main__":
