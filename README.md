@@ -31,6 +31,8 @@ $ conda install pytorch==2.0.0 -c pytorch
 $ pip3 install matplotlib
 $ pip3 install seaborn
 $ pip3 install scipy
+$ pip3 install streamlit
+$ pip3 install plotly
 ```
 
 ## Installation
@@ -98,3 +100,17 @@ For comparison, a copy of the expected results can be found in `ae\expected_resu
 ## User Guide
 
 A guide on "How to Run a LLMCompass Simulation" is shown [here](./docs/run.md).
+
+## Interactive dashboard
+
+You can explore the registered hardware/software/IO combinations with a lightweight
+Streamlit + Plotly front-end:
+
+```
+$ conda activate llmcompass_ae
+$ streamlit run app.py
+```
+
+The UI lets you mix and match compute, IO, and memory modules (or use the
+pre-built devices), configure interconnect presets, and sweep transformer model
+parameters to visualize roofline latency breakdowns.
