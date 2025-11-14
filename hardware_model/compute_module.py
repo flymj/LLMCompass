@@ -1,5 +1,21 @@
 from math import ceil
+from typing import Dict, Optional
 from software_model.utils import DataType, data_type_dict
+
+
+# Peak performance figures for NVIDIA Hopper H100 (SXM 80GB) derived from
+# publicly available datasheets. These values are used to back-compute per-SM
+# throughput parameters so the model can reason about H100-class devices.
+H100_SXM80_FP8_PEAK_FLOPS = 4.0e15
+H100_SXM80_FP16_PEAK_FLOPS = 2.0e15
+H100_SXM80_TF32_PEAK_FLOPS = 9.9e14
+H100_SXM80_FP32_PEAK_FLOPS = 6.0e13
+H100_SXM80_FP64_PEAK_FLOPS = 3.0e13
+H100_SXM80_SM_COUNT = 132
+H100_SXM80_CLOCK_HZ = 1.98e9  # SXM GPUs boost close to 1.98 GHz under load.
+H100_SXM80_VECTOR_FLOPS_PER_SM = (
+    H100_SXM80_FP16_PEAK_FLOPS / (H100_SXM80_CLOCK_HZ * H100_SXM80_SM_COUNT)
+)
 
 
 class VectorUnit:
@@ -28,6 +44,15 @@ vector_unit_dict = {
     "TPUv3_fp32": VectorUnit(128 * 8, 4, 15, 128, 8, data_type_dict["fp32"]),
     "MI210_fp32": VectorUnit(128, 4, 18, 16, 4, data_type_dict["fp32"]),
     "TPUv3_new": VectorUnit(128 * 4, 4, 15, 128, 4, data_type_dict["fp32"]),
+    # TODO: verify H100-specific flops_per_exp/vector geometry once Hopper SM
+    # micro-architecture documentation becomes public.
+    "H100_fp16": VectorUnit(
+        H100_SXM80_VECTOR_FLOPS_PER_SM,
+        2,
+        35,
+        32,
+        4,
+    ),
 }
 
 
@@ -53,6 +78,9 @@ systolic_array_dict = {
     "TPUv3_bf16": SystolicArray(128, 128, 1, 2, 4),
     "MI210_fp16": SystolicArray(16, 16, 0.5, 2, 2),
     "TPUv3_new": SystolicArray(128, 128, 1, 2, 4),
+    # TODO: update array shape/counts if public Hopper tensor core tiling data
+    # becomes available.
+    "H100_fp16": SystolicArray(16, 16, 1, 2, 2),
 }
 
 
@@ -94,6 +122,12 @@ core_dict = {
         1,
         8 * 1024 * 1024,
     ),
+    "SM_H100_fp16": Core(
+        vector_unit_dict["H100_fp16"],
+        systolic_array_dict["H100_fp16"],
+        4,
+        228 * 1024,  # TODO: confirm Hopper shared memory capacity per SM.
+    ),
 }
 # compute_tile_dict={'SM_A100_int8':ComputeTile(512, 4096, 192*1024*8,3.41, 'TSMC N7', 128*8),'SM_A100_fp16':ComputeTile(512, 2048, 192*1024*8,3.41, 'TSMC N7', 128),}
 # flops: https://docs.nvidia.com/deeplearning/performance/dl-performance-gpu-background/index.html#gpu-arch__fig2
@@ -112,6 +146,8 @@ overhead_dict = {
     "A100": Overhead(2.1e-5, 1.2e-5, 4.5e-5, 4.5e-5),
     "TPUv3": Overhead(11e-5, 30e-5, 14e-5, 10e-5),
     "MI210": Overhead(3.4e-5, 2.2e-5, 2.8e-5, 2.1e-5),
+    # TODO: Replace placeholder Hopper overheads once kernels are profiled.
+    "H100": Overhead(2.1e-5, 1.2e-5, 4.5e-5, 4.5e-5),
 }
 
 
@@ -124,6 +160,7 @@ class ComputeModule:
         l2_size,
         l2_bandwidth_per_cycle,
         overhead: Overhead = overhead_dict["A100"],
+        peak_flops: Optional[Dict[str, float]] = None,
     ):
         self.core = core
         self.core_count = core_count
@@ -144,6 +181,7 @@ class ComputeModule:
             * clock_freq
         )
         self.overhead = overhead
+        self.peak_flops = peak_flops or {}
 
 
 compute_module_dict = {
@@ -186,5 +224,22 @@ compute_module_dict = {
         16 * 1024**3,
         490,
         overhead_dict["TPUv3"],
+    ),
+    # NVIDIA Hopper H100 SXM 80GB GPU configuration based on public data.
+    # TODO: refine bandwidth and SRAM parameters when microbenchmarks are ready.
+    "H100_fp16": ComputeModule(
+        core_dict["SM_H100_fp16"],
+        H100_SXM80_SM_COUNT,
+        H100_SXM80_CLOCK_HZ,
+        50 * 1024**2,
+        int(3350e9 / H100_SXM80_CLOCK_HZ),  # Derived from 3.35 TB/s HBM bandwidth.
+        overhead_dict["H100"],
+        peak_flops={
+            "fp8": H100_SXM80_FP8_PEAK_FLOPS,
+            "fp16": H100_SXM80_FP16_PEAK_FLOPS,
+            "tf32": H100_SXM80_TF32_PEAK_FLOPS,
+            "fp32": H100_SXM80_FP32_PEAK_FLOPS,
+            "fp64": H100_SXM80_FP64_PEAK_FLOPS,
+        },
     ),
 }
