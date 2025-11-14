@@ -104,6 +104,14 @@ The user needs to define a new `class` by inheriting `Operator` the class and co
 * `roofline_model` (optional): a roofline model analysis.
 * `run_on_gpu` (optional): run the computational graph on real-world GPUs with PyTorch.
 
+### Modeling FlashAttention-3
+
+Use [`software_model/flash_attention.py`](../software_model/flash_attention.py) to instantiate the fused FlashAttention v3
+operator. It behaves like other operators—call it with `Tensor` objects for Q, K, and V, then run `roofline_model(device)` to
+estimate latency or `compile_and_simulate` for full simulation. Transformer blocks accept an `attention_kernel` parameter
+(`"standard"` or `"flash-attention-3"`), and the Streamlit UI mirrors this toggle for quick comparisons. A lightweight harness,
+`python -m ae.figure5.ab.test_flash_attention --simgpu --roofline`, is available for standalone verification.
+
 ## Step 3: Run a LLMCompass Simulation
 
 First, read the hardware configuration and parse it to LLMCompass:
@@ -133,6 +141,10 @@ _ = model_auto_regression(
 Finally, run the simulation
 ```
 auto_regression_latency_simulated = model_auto_regression.compile_and_simulate(
-	system, "heuristic-GPU"
+        system, "heuristic-GPU"
 )
 ```
+
+All of these steps are wrapped in the Streamlit explorer (`app.py`). You can pick registered or custom devices, customize
+interconnect topology/bandwidth, configure transformer workloads (prefill/decoding), define sweeps over batch or sequence length,
+and inspect latency breakdowns—including the new FlashAttention-3 kernel—without writing extra scripts.
