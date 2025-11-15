@@ -46,6 +46,12 @@ ATTENTION_KERNEL_OPTIONS = {
     "FlashAttention-3": "flash-attention-3",
 }
 
+ATTENTION_MASK_OPTIONS = {
+    "Causal": "causal",
+    "Full": "full",
+    "Sliding window": "sliding_window",
+}
+
 
 def resolve_module_name(target, registry: Dict[str, object]) -> str:
     for name, module in registry.items():
@@ -151,6 +157,8 @@ def run_transformer_prefill(
     data_type_key: str,
     system: System,
     attention_kernel: str,
+    attention_mask: str,
+    attention_window: int | None,
 ) -> Tuple[float, List[Tuple[str, float]]]:
     data_type = data_type_dict[data_type_key]
     model = TransformerBlockInitComputationTP(
@@ -159,6 +167,8 @@ def run_transformer_prefill(
         device_count=device_count,
         data_type=data_type,
         attention_kernel=attention_kernel,
+        attention_mask=attention_mask,
+        attention_window=attention_window,
     )
     _ = model(Tensor([batch_size, seq_len, d_model], data_type))
     latency = model.roofline_model(system)
@@ -176,6 +186,8 @@ def run_transformer_decode(
     data_type_key: str,
     system: System,
     attention_kernel: str,
+    attention_mask: str,
+    attention_window: int | None,
 ) -> Tuple[float, List[Tuple[str, float]]]:
     data_type = data_type_dict[data_type_key]
     model = TransformerBlockAutoRegressionTP(
@@ -184,6 +196,8 @@ def run_transformer_decode(
         device_count=device_count,
         data_type=data_type,
         attention_kernel=attention_kernel,
+        attention_mask=attention_mask,
+        attention_window=attention_window,
     )
     _ = model(Tensor([batch_size, 1, d_model], data_type), kv_seq_len)
     latency = model.roofline_model(system)
@@ -307,6 +321,15 @@ attention_choice_label = st.selectbox(
     "Attention kernel", list(ATTENTION_KERNEL_OPTIONS.keys())
 )
 attention_kernel = ATTENTION_KERNEL_OPTIONS[attention_choice_label]
+attention_mask_label = st.selectbox(
+    "Attention mask", list(ATTENTION_MASK_OPTIONS.keys()), index=0
+)
+attention_mask = ATTENTION_MASK_OPTIONS[attention_mask_label]
+attention_window: int | None = None
+if attention_mask == "sliding_window":
+    attention_window = int(
+        st.number_input("Sliding window size", 1, 65536, 512, 1)
+    )
 
 def validate_transformer_inputs(
     *, d_model: int, n_heads: int, device_count: int
@@ -362,6 +385,8 @@ if software_choice == "Transformer (prefill)":
                     data_type_key=data_type_choice,
                     system=system,
                     attention_kernel=attention_kernel,
+                    attention_mask=attention_mask,
+                    attention_window=attention_window,
                 )
             results.append(
                 {
@@ -443,6 +468,8 @@ else:
                 data_type_key=data_type_choice,
                 system=system,
                 attention_kernel=attention_kernel,
+                attention_mask=attention_mask,
+                attention_window=attention_window,
             )
             results.append(
                 {

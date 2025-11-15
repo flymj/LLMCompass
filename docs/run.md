@@ -109,8 +109,24 @@ The user needs to define a new `class` by inheriting `Operator` the class and co
 Use [`software_model/flash_attention.py`](../software_model/flash_attention.py) to instantiate the fused FlashAttention v3
 operator. It behaves like other operators—call it with `Tensor` objects for Q, K, and V, then run `roofline_model(device)` to
 estimate latency or `compile_and_simulate` for full simulation. Transformer blocks accept an `attention_kernel` parameter
-(`"standard"` or `"flash-attention-3"`), and the Streamlit UI mirrors this toggle for quick comparisons. A lightweight harness,
-`python -m ae.figure5.ab.test_flash_attention --simgpu --roofline`, is available for standalone verification.
+(`"standard"` or `"flash-attention-3"`) **and** additional knobs for `attention_mask` (`full`, `causal`, `sliding_window`) plus an
+optional sliding-window size. The Streamlit UI exposes the same knobs, so you can sweep masks without editing code. Under the hood
+the operator performs tile-by-tile accounting of Q/K/V loads, local SRAM reuse, and avoids writing score matrices back to HBM to
+mirror FlashAttention's IO behavior. A lightweight harness,
+`python ae/figure5/ab/demo_flash_attention_tile_stats.py`, compares FLOPs and traffic between the baseline attention stack and the
+fused operator for sanity checks.
+
+For end-to-end correlation against real GPUs, use the helper in [`correlation/`](../correlation). The command
+
+```bash
+python correlation/run_flash_attention_correlation.py \
+    --batch 1 --heads 8 --seq-len-q 2048 --dim-qk 128 --dim-v 128 \
+    --attention-mask causal --sim-device H100_80GB_fp16 \
+    --measure-hardware --hardware-kernel flash --profile-iters 50
+```
+
+runs the simulator, optionally launches PyTorch's FlashAttention-backed SDPA on a CUDA device, and prints both sets of cycles.
+Supply `--gpu-clock-khz` if you gather CUPTI/Nsight traces separately and want to insert the measured clock frequency.
 
 ## Step 3: Run a LLMCompass Simulation
 

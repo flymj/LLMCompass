@@ -26,6 +26,8 @@ class TransformerBlockInitComputationTP(Operator):
         device_count,
         data_type: DataType,
         attention_kernel: str = "standard",
+        attention_mask: str = "causal",
+        attention_window: int | None = None,
     ):
         super().__init__(0, 0, 0, 0, data_type)
         self.d_model = d_model
@@ -33,6 +35,8 @@ class TransformerBlockInitComputationTP(Operator):
         self.device_count = device_count
         self.attention_kernel = attention_kernel
         self.use_flash_attention = attention_kernel == "flash-attention-3"
+        self.attention_mask = attention_mask
+        self.attention_window = attention_window
         # parameters per device
         d = d_model
         self.Wq = Tensor([d, d // device_count], data_type)
@@ -56,7 +60,11 @@ class TransformerBlockInitComputationTP(Operator):
         self.A_softmax = Softmax(data_type)
         self.A_mul_V = BatchedMatmul(data_type)
         if self.use_flash_attention:
-            self.flash_attention = FlashAttention3(data_type)
+            self.flash_attention = FlashAttention3(
+                data_type,
+                mask_type=self.attention_mask,
+                window_size=self.attention_window,
+            )
         self.H_transpose = Transpose(data_type)
         self.H_reshape = Reshape(data_type)
         self.H_matmul0 = Matmul(data_type)
@@ -441,6 +449,8 @@ class TransformerBlockAutoRegressionTP(Operator):
         device_count,
         data_type: DataType,
         attention_kernel: str = "standard",
+        attention_mask: str = "causal",
+        attention_window: int | None = None,
     ):
         super().__init__(0, 0, 0, 0, data_type)
         self.d_model = d_model
@@ -448,6 +458,8 @@ class TransformerBlockAutoRegressionTP(Operator):
         self.device_count = device_count
         self.attention_kernel = attention_kernel
         self.use_flash_attention = attention_kernel == "flash-attention-3"
+        self.attention_mask = attention_mask
+        self.attention_window = attention_window
         # parameters per device
         d = d_model
         self.Wq = Tensor([d, d // device_count], data_type)
@@ -473,7 +485,11 @@ class TransformerBlockAutoRegressionTP(Operator):
         self.A_softmax = Softmax(data_type)
         self.A_mul_V = BatchedMatmul(data_type)
         if self.use_flash_attention:
-            self.flash_attention = FlashAttention3(data_type)
+            self.flash_attention = FlashAttention3(
+                data_type,
+                mask_type=self.attention_mask,
+                window_size=self.attention_window,
+            )
         self.H_transpose = Transpose(data_type)
         self.H_reshape = Reshape(data_type)
         self.H_matmul0 = Matmul(data_type)
