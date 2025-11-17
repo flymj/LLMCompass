@@ -37,7 +37,7 @@ class LayerNorm(Operator):
             self.io_count
             / min(
                 pcb_module.io_module.bandwidth,
-                pcb_module.compute_module.l2_bandwidth_per_cycle
+                pcb_module.global_buffer_bandwidth_per_cycle
                 * pcb_module.compute_module.clock_freq,
             ),
             self.flop_count / pcb_module.compute_module.total_vector_flops,
@@ -83,7 +83,7 @@ class LayerNorm(Operator):
         data_type = self.computational_graph.data_type
         l2_tile_N = N
         l2_tile_M = (
-            pcb_module.compute_module.l2_size // (l2_tile_N * data_type.word_size) // 2
+            pcb_module.global_buffer_size_bytes // (l2_tile_N * data_type.word_size) // 2
         )
         l2_tile_M = min(l2_tile_M, M)
         if compile_mode == "heuristic-GPU" or compile_mode == "heuristic-our-throughput":
@@ -261,7 +261,7 @@ class LayerNorm(Operator):
                 * data_type.word_size
                 * 2
                 / (
-                    pcb_module.compute_module.l2_bandwidth_per_cycle
+                    pcb_module.global_buffer_bandwidth_per_cycle
                     / pcb_module.compute_module.core_count
                 )
             )
@@ -273,7 +273,7 @@ class LayerNorm(Operator):
                 M
                 * N
                 * data_type.word_size
-                / (pcb_module.compute_module.l2_bandwidth_per_cycle)
+                / (pcb_module.global_buffer_bandwidth_per_cycle)
             )
 
         def simulate_l1_tile_compute_cycle_count(

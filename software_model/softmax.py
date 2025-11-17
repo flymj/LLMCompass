@@ -60,7 +60,15 @@ class Softmax(Operator):
     def roofline_model(self, pcb_module: Device):
         self.io_count = self.M * self.N * self.data_type.word_size * 3
         self.flop_count = self.M * self.N * (pcb_module.compute_module.core.vector_unit.flops_per_exp * 3 + 7)
-        self.roofline_latency=max(self.io_count/min(pcb_module.io_module.bandwidth, pcb_module.compute_module.l2_bandwidth_per_cycle*pcb_module.compute_module.clock_freq), self.flop_count/pcb_module.compute_module.total_vector_flops)
+        self.roofline_latency = max(
+            self.io_count
+            / min(
+                pcb_module.io_module.bandwidth,
+                pcb_module.global_buffer_bandwidth_per_cycle
+                * pcb_module.compute_module.clock_freq,
+            ),
+            self.flop_count / pcb_module.compute_module.total_vector_flops,
+        )
         return self.roofline_latency
 
     def compile_and_simulate(self, pcb_module: Device, compile_mode=None):
@@ -72,7 +80,7 @@ class Softmax(Operator):
         data_type = self.computational_graph.data_type
         l2_tile_N = N
         l2_tile_M = (
-            pcb_module.compute_module.l2_size // (l2_tile_N * data_type.word_size)
+            pcb_module.global_buffer_size_bytes // (l2_tile_N * data_type.word_size)
         )
         l2_tile_M = min(l2_tile_M, M)
         is_l2_double_buffering = False
@@ -127,11 +135,11 @@ class Softmax(Operator):
         if mapping.is_l2_double_buffering:
             assert (
                 l2_tile_M * N * data_type.word_size * 2
-                <= pcb_module.compute_module.l2_size
+                <= pcb_module.global_buffer_size_bytes
             )
         else:
             assert (
-                l2_tile_M * N * data_type.word_size <= pcb_module.compute_module.l2_size
+                l2_tile_M * N * data_type.word_size <= pcb_module.global_buffer_size_bytes
             )
 
         M_l2_t = M // l2_tile_M
@@ -263,7 +271,10 @@ class Softmax(Operator):
                 * N
                 * data_type.word_size
                 * 2
-                / (pcb_module.compute_module.l2_bandwidth_per_cycle/pcb_module.compute_module.core_count)
+                / (
+                    pcb_module.global_buffer_bandwidth_per_cycle
+                    / pcb_module.compute_module.core_count
+                )
             )
 
         def simulate_l1_tile_io_cycle_count(
@@ -273,7 +284,7 @@ class Softmax(Operator):
                 M
                 * N
                 * data_type.word_size
-                / (pcb_module.compute_module.l2_bandwidth_per_cycle)
+                / (pcb_module.global_buffer_bandwidth_per_cycle)
             )
 
         def simulate_l1_tile_compute_cycle_count(

@@ -157,7 +157,7 @@ class Matmul(Operator):
             self.io_count
             / min(
                 pcb_module.io_module.bandwidth,
-                pcb_module.compute_module.l2_bandwidth_per_cycle
+                pcb_module.global_buffer_bandwidth_per_cycle
                 * pcb_module.compute_module.clock_freq,
             ),
         )
@@ -318,13 +318,13 @@ class Matmul(Operator):
                         )
                         if (
                             working_set_size
-                            > pcb_module.compute_module.l2_size
+                            > pcb_module.global_buffer_size_bytes
                             // self.data_type.word_size
                         ):
                             continue
                         elif (
                             working_set_size
-                            <= pcb_module.compute_module.l2_size
+                            <= pcb_module.global_buffer_size_bytes
                             // self.data_type.word_size
                             // 2
                         ):
@@ -406,7 +406,7 @@ class Matmul(Operator):
                     
                 ]:
                     l2_tile_K_max = (
-                        pcb_module.compute_module.l2_size
+                        pcb_module.global_buffer_size_bytes
                         // self.data_type.word_size
                         // 2
                         - l2_tile_M * l2_tile_N
@@ -423,12 +423,12 @@ class Matmul(Operator):
                     )
                     if (
                         working_set_size
-                        > pcb_module.compute_module.l2_size // self.data_type.word_size
+                        > pcb_module.global_buffer_size_bytes // self.data_type.word_size
                     ):
                         continue
                     elif (
                         working_set_size
-                        <= pcb_module.compute_module.l2_size
+                        <= pcb_module.global_buffer_size_bytes
                         // self.data_type.word_size
                         // 2
                     ):
@@ -526,13 +526,13 @@ class Matmul(Operator):
                         )
                         if (
                             working_set_size
-                            > pcb_module.compute_module.l2_size
+                            > pcb_module.global_buffer_size_bytes
                             // self.data_type.word_size
                         ):
                             continue
                         elif (
                             working_set_size
-                            <= pcb_module.compute_module.l2_size
+                            <= pcb_module.global_buffer_size_bytes
                             // self.data_type.word_size
                             // 2
                         ):
@@ -791,12 +791,12 @@ class Matmul(Operator):
         if mapping.is_l2_double_buffering:
             assert (
                 l2_tile_M * l2_tile_N + l2_tile_N * l2_tile_K + l2_tile_M * l2_tile_K
-                <= pcb_module.compute_module.l2_size // self.data_type.word_size // 2
+                <= pcb_module.global_buffer_size_bytes // self.data_type.word_size // 2
             )
         else:
             assert (
                 l2_tile_M * l2_tile_N + l2_tile_N * l2_tile_K + l2_tile_M * l2_tile_K
-                <= pcb_module.compute_module.l2_size // self.data_type.word_size
+                <= pcb_module.global_buffer_size_bytes // self.data_type.word_size
             )
 
         M_l2_t = M // l2_tile_M
@@ -990,7 +990,7 @@ class Matmul(Operator):
                 M
                 * N
                 * data_type.word_size
-                / pcb_module.compute_module.l2_bandwidth_per_cycle
+                / pcb_module.global_buffer_bandwidth_per_cycle
             )
             self.K_reduction_io_count = 2 * M * N * data_type.word_size
             self.M_K_io_cycle_count = self.simulate_l2_tile_io_cycle_count(
@@ -1257,12 +1257,12 @@ class Matmul(Operator):
                 current_batch_read_cycle_count = ceil(
                     current_batch_read_count
                     * chiplet_module.compute_module.core.systolic_array.input_word_size
-                    / chiplet_module.compute_module.l2_bandwidth_per_cycle
+                    / chiplet_module.global_buffer_bandwidth_per_cycle
                 )
                 prvious_batch_write_cycle_count = ceil(
                     previous_batch_M_N_write_count
                     * chiplet_module.compute_module.core.systolic_array.output_word_size
-                    / chiplet_module.compute_module.l2_bandwidth_per_cycle
+                    / chiplet_module.global_buffer_bandwidth_per_cycle
                 )
 
                 total_cycle_count += (
@@ -1285,7 +1285,7 @@ class Matmul(Operator):
             total_cycle_count += previous_batch_compute_cycle_count + ceil(
                 np.sum(previous_batch_Write_M_N * M_N_tile_size)
                 * data_type.word_size
-                / chiplet_module.compute_module.l2_bandwidth_per_cycle
+                / chiplet_module.global_buffer_bandwidth_per_cycle
             )
 
             return total_cycle_count

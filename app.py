@@ -64,7 +64,6 @@ def describe_compute_module(module: ComputeModule) -> Dict[str, float]:
     return {
         "cores": module.core_count,
         "clock_GHz": round(module.clock_freq / 1e9, 2),
-        "l2_MB": round(module.l2_size / 1024**2, 1),
         "vector_TFLOPS": round(module.total_vector_flops / 1e12, 2),
         "tensor_TFLOPS": round(module.total_systolic_array_flops / 1e12, 2),
     }
@@ -133,10 +132,11 @@ def summarize_hardware(device: Device) -> None:
     compute_summary = describe_compute_module(device.compute_module)
     memory_summary = describe_memory_module(device.memory_module)
     io_bandwidth_tb = device.io_module.bandwidth / 1e12
+    global_buffer_mb = round(device.global_buffer_size_bytes / 1024**2, 1)
     col1, col2, col3 = st.columns(3)
     col1.metric("Cores", compute_summary["cores"])
     col2.metric("Clock (GHz)", compute_summary["clock_GHz"])
-    col3.metric("L2 cache (MB)", compute_summary["l2_MB"])
+    col3.metric("Global buffer (MB)", global_buffer_mb)
     col4, col5, col6 = st.columns(3)
     col4.metric("Vector throughput (TFLOPS)", compute_summary["vector_TFLOPS"])
     col5.metric("Tensor throughput (TFLOPS)", compute_summary["tensor_TFLOPS"])
