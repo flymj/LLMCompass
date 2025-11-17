@@ -61,11 +61,17 @@ def resolve_module_name(target, registry: Dict[str, object]) -> str:
 
 
 def describe_compute_module(module: ComputeModule) -> Dict[str, float]:
+    vector_tflops = module.total_vector_flops / 1e12
+    tensor_tflops = module.total_systolic_array_flops / 1e12
+    a110_module = compute_module_dict.get("A110_fp16")
+    if a110_module is not None and module is a110_module:
+        vector_tflops *= 2
+        tensor_tflops *= 2
     return {
         "cores": module.core_count,
         "clock_GHz": round(module.clock_freq / 1e9, 2),
-        "vector_TFLOPS": round(module.total_vector_flops / 1e12, 2),
-        "tensor_TFLOPS": round(module.total_systolic_array_flops / 1e12, 2),
+        "vector_TFLOPS": round(vector_tflops, 2),
+        "tensor_TFLOPS": round(tensor_tflops, 2),
     }
 
 
@@ -112,16 +118,27 @@ def build_system(device: Device, interconnect: InterConnectModule) -> System:
 
 
 def render_breakdown_chart(
-    breakdown: List[Tuple[str, float]], *, chart_key: str
+    breakdowns_by_device: Dict[str, List[Tuple[str, float]]], *, chart_key: str
 ) -> None:
-    if not breakdown:
+    records = []
+    for device_name, breakdown in breakdowns_by_device.items():
+        for stage, latency_s in breakdown:
+            records.append(
+                {
+                    "Stage": stage,
+                    "Device": device_name,
+                    "Latency (ms)": latency_s * 1e3,
+                }
+            )
+    if not records:
         return
-    names = [name for name, _ in breakdown]
-    latencies_ms = [value * 1e3 for _, value in breakdown]
     fig = px.bar(
-        x=names,
-        y=latencies_ms,
-        labels={"x": "Stage", "y": "Latency (ms)"},
+        records,
+        x="Stage",
+        y="Latency (ms)",
+        color="Device",
+        barmode="group",
+        category_orders={"Stage": TRANSFORMER_STAGE_LABELS},
         title="Roofline latency breakdown",
     )
     fig.update_layout(xaxis_tickangle=-45)
@@ -456,12 +473,18 @@ if software_choice == "Transformer (prefill)":
                             use_container_width=True,
                             hide_index=True,
                         )
-                        render_breakdown_chart(
-                            breakdown,
-                            chart_key=f"prefill_breakdown_{name}",
-                        )
                     else:
                         st.info("Breakdown data is not available for this device.")
+            chart_breakdowns = {
+                name: comparison_results[name][-1]["breakdown"]
+                for name in selected_device_names
+                if comparison_results[name][-1]["breakdown"]
+            }
+            if chart_breakdowns:
+                render_breakdown_chart(
+                    chart_breakdowns,
+                    chart_key="prefill_breakdown_grouped",
+                )
 
         if len(sweep_values) > 1:
             sweep_axis = (
@@ -581,12 +604,18 @@ else:
                             use_container_width=True,
                             hide_index=True,
                         )
-                        render_breakdown_chart(
-                            breakdown,
-                            chart_key=f"decode_breakdown_{name}",
-                        )
                     else:
                         st.info("Breakdown data is not available for this device.")
+            chart_breakdowns = {
+                name: comparison_results[name][-1]["breakdown"]
+                for name in selected_device_names
+                if comparison_results[name][-1]["breakdown"]
+            }
+            if chart_breakdowns:
+                render_breakdown_chart(
+                    chart_breakdowns,
+                    chart_key="decode_breakdown_grouped",
+                )
 
         if len(sweep_values) > 1:
             sweep_axis = (
