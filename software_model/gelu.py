@@ -37,7 +37,7 @@ class GeLU(Operator):
         total_io_count = M * 2 * data_type.word_size
         io_latency = (
             total_io_count / min(pcb_module.io_module.bandwidth
-            , pcb_module.compute_module.l2_bandwidth_per_cycle
+            , pcb_module.global_buffer_bandwidth_per_cycle
             * pcb_module.compute_module.clock_freq)
         )
         total_flop_count = M * (
@@ -75,7 +75,7 @@ class GeLU(Operator):
         io_latency = (
             total_io_count / pcb_module.io_module.bandwidth
             + total_io_count
-            / pcb_module.compute_module.l2_bandwidth_per_cycle
+            / pcb_module.global_buffer_bandwidth_per_cycle
             / pcb_module.compute_module.clock_freq
         )
         total_flop_count = M * (

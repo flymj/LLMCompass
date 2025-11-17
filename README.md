@@ -114,3 +114,13 @@ $ streamlit run app.py
 The UI lets you mix and match compute, IO, and memory modules (or use the
 pre-built devices), configure interconnect presets, and sweep transformer model
 parameters to visualize roofline latency breakdowns.
+
+- **Entry point.** `app.py` remains the entry point—run `streamlit run app.py`
+  and select the "Registered device" option to load presets such as the updated
+  A110 topology.
+- **Roofline detail.** After clicking **Run roofline analysis**, the dashboard
+  reports overall latency, a per-stage table, and a bar chart that exposes the
+  roofline breakdown for the latest sweep point.
+- **Multi-device comparisons.** Analyze one device at a time, but you can switch
+  the preset dropdown (or open multiple browser tabs) to collect results for
+  several devices side by side.

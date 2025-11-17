@@ -123,7 +123,7 @@ class FlashAttention3(Operator):
         )
         bandwidth = min(
             pcb_module.io_module.bandwidth,
-            pcb_module.compute_module.l2_bandwidth_per_cycle
+            pcb_module.global_buffer_bandwidth_per_cycle
             * pcb_module.compute_module.clock_freq,
         )
         io_latency = (self.hbm_read_bytes + self.hbm_write_bytes) / bandwidth
