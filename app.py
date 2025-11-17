@@ -1,11 +1,16 @@
 """Streamlit dashboard for exploring LLMCompass hardware/software combinations."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
 import plotly.express as px
 import streamlit as st
 
+from design_space_exploration.dse import (
+    read_architecture_template,
+    template_to_system,
+)
 from hardware_model.compute_module import ComputeModule, compute_module_dict
 from hardware_model.device import Device, device_dict
 from hardware_model.interconnect import (
@@ -24,6 +29,8 @@ from software_model.transformer import (
 from software_model.utils import Tensor, data_type_dict
 
 st.set_page_config(page_title="LLMCompass Explorer", layout="wide")
+
+NODE_CONFIG_DIR = Path(__file__).resolve().parent / "configs" / "nodes"
 
 TRANSFORMER_STAGE_LABELS = [
     "Q/K/V projections",
@@ -115,6 +122,22 @@ def parse_int_list(raw: str, fallback: Sequence[int]) -> List[int]:
 
 def build_system(device: Device, interconnect: InterConnectModule) -> System:
     return System(device, interconnect)
+
+
+def discover_node_configs() -> Dict[str, Path]:
+    if not NODE_CONFIG_DIR.exists():
+        return {}
+    configs = {}
+    for path in sorted(NODE_CONFIG_DIR.glob("*.json")):
+        configs[path.stem] = path
+    return configs
+
+
+def load_node_system(template_path: Path) -> Tuple[str, System]:
+    specs = read_architecture_template(str(template_path))
+    system = template_to_system(specs)
+    name = specs.get("name") or template_path.stem
+    return name, system
 
 
 def render_breakdown_chart(
@@ -231,111 +254,143 @@ st.write(
 st.sidebar.header("Hardware stack")
 hardware_mode = st.sidebar.selectbox(
     "Select hardware source",
-    ("Registered device", "Custom modules"),
+    ("Registered device", "Custom modules", "Node config"),
 )
 
-if hardware_mode == "Registered device":
-    preset_options = sorted(device_dict.keys())
-    default_selection = preset_options[:1]
-    selected_device_names = st.sidebar.multiselect(
-        "Device presets",
-        preset_options,
-        default=default_selection,
-        help="Pick one or more registered devices to compare.",
-    )
-    if not selected_device_names:
-        st.sidebar.error("Select at least one device preset to continue.")
+selected_devices: Dict[str, Device] = {}
+selected_device_names: List[str] = []
+systems: Dict[str, System] = {}
+
+if hardware_mode == "Node config":
+    node_configs = discover_node_configs()
+    if not node_configs:
+        st.sidebar.error("No node templates found under configs/nodes.")
         st.stop()
-    selected_devices = {name: device_dict[name] for name in selected_device_names}
-    for name in selected_device_names:
-        device = selected_devices[name]
-        compute_name = resolve_module_name(
-            device.compute_module, compute_module_dict
-        )
-        io_name = resolve_module_name(device.io_module, IO_module_dict)
-        memory_name = resolve_module_name(
-            device.memory_module, memory_module_dict
-        )
+    node_options = sorted(node_configs.keys())
+    default_nodes = node_options[:1]
+    selected_nodes = st.sidebar.multiselect(
+        "Node templates",
+        node_options,
+        default=default_nodes,
+        help="Pick one or more JSON configs from configs/nodes to compare.",
+    )
+    if not selected_nodes:
+        st.sidebar.error("Select at least one node template to continue.")
+        st.stop()
+    for node_key in selected_nodes:
+        node_name, system = load_node_system(node_configs[node_key])
+        selected_devices[node_name] = system.device
+        selected_device_names.append(node_name)
+        systems[node_name] = system
+        topo = system.interconnect_module.topology.name
         st.sidebar.markdown(
-            f"**{name}**  \n"
-            f"• Compute: `{compute_name}`  \n"
-            f"• IO: `{io_name}`  \n"
-            f"• Memory: `{memory_name}`"
+            f"**{node_name}**  \n"
+            f"• Devices: {system.interconnect_module.device_count}  \n"
+            f"• Topology: {topo}"
         )
 else:
-    selected_device_names = ["custom"]
-    compute_name = st.sidebar.selectbox(
-        "Compute module", sorted(compute_module_dict.keys())
-    )
-    io_name = st.sidebar.selectbox("IO module", sorted(IO_module_dict.keys()))
-    memory_name = st.sidebar.selectbox(
-        "Memory module", sorted(memory_module_dict.keys())
-    )
-    custom_device = Device(
-        compute_module_dict[compute_name],
-        IO_module_dict[io_name],
-        memory_module_dict[memory_name],
-    )
-    selected_devices = {"custom": custom_device}
-    st.sidebar.markdown(
-        f"**Compute:** `{compute_name}`  \n"
-        f"**IO:** `{io_name}`  \n"
-        f"**Memory:** `{memory_name}`"
-    )
+    if hardware_mode == "Registered device":
+        preset_options = sorted(device_dict.keys())
+        default_selection = preset_options[:1]
+        selected_device_names = st.sidebar.multiselect(
+            "Device presets",
+            preset_options,
+            default=default_selection,
+            help="Pick one or more registered devices to compare.",
+        )
+        if not selected_device_names:
+            st.sidebar.error("Select at least one device preset to continue.")
+            st.stop()
+        selected_devices = {name: device_dict[name] for name in selected_device_names}
+        for name in selected_device_names:
+            device = selected_devices[name]
+            compute_name = resolve_module_name(
+                device.compute_module, compute_module_dict
+            )
+            io_name = resolve_module_name(device.io_module, IO_module_dict)
+            memory_name = resolve_module_name(
+                device.memory_module, memory_module_dict
+            )
+            st.sidebar.markdown(
+                f"**{name}**  \n"
+                f"• Compute: `{compute_name}`  \n"
+                f"• IO: `{io_name}`  \n"
+                f"• Memory: `{memory_name}`"
+            )
+    else:
+        selected_device_names = ["custom"]
+        compute_name = st.sidebar.selectbox(
+            "Compute module", sorted(compute_module_dict.keys())
+        )
+        io_name = st.sidebar.selectbox("IO module", sorted(IO_module_dict.keys()))
+        memory_name = st.sidebar.selectbox(
+            "Memory module", sorted(memory_module_dict.keys())
+        )
+        custom_device = Device(
+            compute_module_dict[compute_name],
+            IO_module_dict[io_name],
+            memory_module_dict[memory_name],
+        )
+        selected_devices = {"custom": custom_device}
+        st.sidebar.markdown(
+            f"**Compute:** `{compute_name}`  \n"
+            f"**IO:** `{io_name}`  \n"
+            f"**Memory:** `{memory_name}`"
+        )
 
-st.sidebar.header("Interconnect")
-interconnect_mode = st.sidebar.selectbox(
-    "Select interconnect source", ("Preset", "Custom")
-)
-if interconnect_mode == "Preset":
-    interconnect_name = st.sidebar.selectbox(
-        "Preset", sorted(interconnect_module_dict.keys())
+    st.sidebar.header("Interconnect")
+    interconnect_mode = st.sidebar.selectbox(
+        "Select interconnect source", ("Preset", "Custom")
     )
-    interconnect = interconnect_module_dict[interconnect_name]
-else:
-    topology_label = st.sidebar.selectbox("Topology", ("FC", "RING"))
-    device_count_ic = st.sidebar.number_input(
-        "Device count", min_value=1, value=4, step=1
-    )
-    link_count = st.sidebar.number_input(
-        "Links per device", min_value=1, value=12, step=1
-    )
-    bw_per_dir_gbps = st.sidebar.number_input(
-        "Bandwidth per direction (GB/s)", min_value=1.0, value=25.0, step=1.0
-    )
-    aggregate_bw_gbps = st.sidebar.number_input(
-        "Bidirectional bandwidth (GB/s)", min_value=1.0, value=50.0, step=1.0
-    )
-    latency_ns = st.sidebar.number_input(
-        "Link latency (ns)", min_value=1.0, value=100.0, step=1.0
-    )
-    flit_size = st.sidebar.number_input("Flit size (B)", min_value=1, value=16, step=1)
-    payload = st.sidebar.number_input(
-        "Max payload (B)", min_value=16, value=256, step=16
-    )
-    header = st.sidebar.number_input(
-        "Header size (B)", min_value=4, value=16, step=4
-    )
-    link = LinkModule(
-        bandwidth_per_direction=bw_per_dir_gbps * 1e9,
-        bandwidth_both_direction=aggregate_bw_gbps * 1e9,
-        latency=latency_ns * 1e-9,
-        flit_size=flit_size,
-        max_payload_size=payload,
-        header_size=header,
-    )
-    interconnect = InterConnectModule(
-        device_count=int(device_count_ic),
-        topology=TopologyType[topology_label],
-        link_module=link,
-        link_count_per_device=int(link_count),
-    )
-    interconnect_name = f"custom_{topology_label.lower()}"
+    if interconnect_mode == "Preset":
+        interconnect_name = st.sidebar.selectbox(
+            "Preset", sorted(interconnect_module_dict.keys())
+        )
+        interconnect = interconnect_module_dict[interconnect_name]
+    else:
+        topology_label = st.sidebar.selectbox("Topology", ("FC", "RING"))
+        device_count_ic = st.sidebar.number_input(
+            "Device count", min_value=1, value=4, step=1
+        )
+        link_count = st.sidebar.number_input(
+            "Links per device", min_value=1, value=12, step=1
+        )
+        bw_per_dir_gbps = st.sidebar.number_input(
+            "Bandwidth per direction (GB/s)", min_value=1.0, value=25.0, step=1.0
+        )
+        aggregate_bw_gbps = st.sidebar.number_input(
+            "Bidirectional bandwidth (GB/s)", min_value=1.0, value=50.0, step=1.0
+        )
+        latency_ns = st.sidebar.number_input(
+            "Link latency (ns)", min_value=1.0, value=100.0, step=1.0
+        )
+        flit_size = st.sidebar.number_input("Flit size (B)", min_value=1, value=16, step=1)
+        payload = st.sidebar.number_input(
+            "Max payload (B)", min_value=16, value=256, step=16
+        )
+        header = st.sidebar.number_input(
+            "Header size (B)", min_value=4, value=16, step=4
+        )
+        link = LinkModule(
+            bandwidth_per_direction=bw_per_dir_gbps * 1e9,
+            bandwidth_both_direction=aggregate_bw_gbps * 1e9,
+            latency=latency_ns * 1e-9,
+            flit_size=flit_size,
+            max_payload_size=payload,
+            header_size=header,
+        )
+        interconnect = InterConnectModule(
+            device_count=int(device_count_ic),
+            topology=TopologyType[topology_label],
+            link_module=link,
+            link_count_per_device=int(link_count),
+        )
+        interconnect_name = f"custom_{topology_label.lower()}"
 
-systems = {
-    name: build_system(selected_devices[name], interconnect)
-    for name in selected_device_names
-}
+    systems = {
+        name: build_system(selected_devices[name], interconnect)
+        for name in selected_device_names
+    }
 
 st.subheader("Selected hardware summary")
 for idx, name in enumerate(selected_device_names):
