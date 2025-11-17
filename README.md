@@ -117,10 +117,11 @@ parameters to visualize roofline latency breakdowns.
 
 - **Entry point.** `app.py` remains the entry point—run `streamlit run app.py`
   and select the "Registered device" option to load presets such as the updated
-  A110 topology.
+  A110 topology (now available in the preset list).
 - **Roofline detail.** After clicking **Run roofline analysis**, the dashboard
   reports overall latency, a per-stage table, and a bar chart that exposes the
   roofline breakdown for the latest sweep point.
-- **Multi-device comparisons.** Analyze one device at a time, but you can switch
-  the preset dropdown (or open multiple browser tabs) to collect results for
-  several devices side by side.
+- **Multi-device comparisons.** Use the "Device presets" multiselect to analyze
+  one or more registered devices simultaneously; tables and sweep plots now show
+  per-device overlays so you can compare chips side by side without opening new
+  browser tabs.

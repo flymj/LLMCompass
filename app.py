@@ -218,19 +218,35 @@ hardware_mode = st.sidebar.selectbox(
 )
 
 if hardware_mode == "Registered device":
-    preset_name = st.sidebar.selectbox(
-        "Device preset", sorted(device_dict.keys()), index=0
+    preset_options = sorted(device_dict.keys())
+    default_selection = preset_options[:1]
+    selected_device_names = st.sidebar.multiselect(
+        "Device presets",
+        preset_options,
+        default=default_selection,
+        help="Pick one or more registered devices to compare.",
     )
-    current_device = device_dict[preset_name]
-    compute_name = resolve_module_name(
-        current_device.compute_module, compute_module_dict
-    )
-    io_name = resolve_module_name(current_device.io_module, IO_module_dict)
-    memory_name = resolve_module_name(
-        current_device.memory_module, memory_module_dict
-    )
+    if not selected_device_names:
+        st.sidebar.error("Select at least one device preset to continue.")
+        st.stop()
+    selected_devices = {name: device_dict[name] for name in selected_device_names}
+    for name in selected_device_names:
+        device = selected_devices[name]
+        compute_name = resolve_module_name(
+            device.compute_module, compute_module_dict
+        )
+        io_name = resolve_module_name(device.io_module, IO_module_dict)
+        memory_name = resolve_module_name(
+            device.memory_module, memory_module_dict
+        )
+        st.sidebar.markdown(
+            f"**{name}**  \n"
+            f"• Compute: `{compute_name}`  \n"
+            f"• IO: `{io_name}`  \n"
+            f"• Memory: `{memory_name}`"
+        )
 else:
-    preset_name = "custom"
+    selected_device_names = ["custom"]
     compute_name = st.sidebar.selectbox(
         "Compute module", sorted(compute_module_dict.keys())
     )
@@ -238,17 +254,17 @@ else:
     memory_name = st.sidebar.selectbox(
         "Memory module", sorted(memory_module_dict.keys())
     )
-    current_device = Device(
+    custom_device = Device(
         compute_module_dict[compute_name],
         IO_module_dict[io_name],
         memory_module_dict[memory_name],
     )
-
-st.sidebar.markdown(
-    f"**Compute:** `{compute_name}`  \n"
-    f"**IO:** `{io_name}`  \n"
-    f"**Memory:** `{memory_name}`"
-)
+    selected_devices = {"custom": custom_device}
+    st.sidebar.markdown(
+        f"**Compute:** `{compute_name}`  \n"
+        f"**IO:** `{io_name}`  \n"
+        f"**Memory:** `{memory_name}`"
+    )
 
 st.sidebar.header("Interconnect")
 interconnect_mode = st.sidebar.selectbox(
@@ -299,10 +315,17 @@ else:
     )
     interconnect_name = f"custom_{topology_label.lower()}"
 
-system = build_system(current_device, interconnect)
+systems = {
+    name: build_system(selected_devices[name], interconnect)
+    for name in selected_device_names
+}
 
 st.subheader("Selected hardware summary")
-summarize_hardware(current_device)
+for idx, name in enumerate(selected_device_names):
+    st.markdown(f"**{name}**")
+    summarize_hardware(selected_devices[name])
+    if idx < len(selected_device_names) - 1:
+        st.markdown("---")
 
 st.header("Software workload")
 software_choice = st.selectbox(
@@ -372,10 +395,12 @@ if software_choice == "Transformer (prefill)":
             sweep_values_raw,
             [batch_size] if sweep_param == "Batch size" else [seq_len],
         )
-        results = []
-        for value in sweep_values:
-            current_batch = value if sweep_param == "Batch size" else batch_size
-            current_seq = value if sweep_param == "Sequence length" else seq_len
+        comparison_results: Dict[str, List[Dict[str, object]]] = {}
+        for device_name in selected_device_names:
+            device_results: List[Dict[str, object]] = []
+            for value in sweep_values:
+                current_batch = value if sweep_param == "Batch size" else batch_size
+                current_seq = value if sweep_param == "Sequence length" else seq_len
                 latency, breakdown = run_transformer_prefill(
                     d_model=int(d_model),
                     n_heads=int(n_heads),
@@ -383,42 +408,82 @@ if software_choice == "Transformer (prefill)":
                     batch_size=int(current_batch),
                     seq_len=int(current_seq),
                     data_type_key=data_type_choice,
-                    system=system,
+                    system=systems[device_name],
                     attention_kernel=attention_kernel,
                     attention_mask=attention_mask,
                     attention_window=attention_window,
                 )
-            results.append(
-                {
-                    "batch_size": current_batch,
-                    "seq_len": current_seq,
-                    "latency_s": latency,
-                    "breakdown": breakdown,
-                }
-            )
-        st.success(
-            f"Latest configuration latency: {results[-1]['latency_s'] * 1e3:.3f} ms"
-        )
-        breakdown = results[-1]["breakdown"]
-        if breakdown:
-            st.subheader("Latency breakdown")
-            st.dataframe(
-                [
+                device_results.append(
                     {
-                        "Stage": name,
-                        "Latency (ms)": round(value * 1e3, 4),
+                        "batch_size": current_batch,
+                        "seq_len": current_seq,
+                        "latency_s": latency,
+                        "breakdown": breakdown,
                     }
-                    for name, value in breakdown
-                ],
-                use_container_width=True,
-                hide_index=True,
+                )
+            comparison_results[device_name] = device_results
+
+        st.success("Roofline analysis complete.")
+        latest_rows = [
+            {
+                "Device": name,
+                "Batch size": device_results[-1]["batch_size"],
+                "Sequence length": device_results[-1]["seq_len"],
+                "Latency (ms)": round(device_results[-1]["latency_s"] * 1e3, 3),
+            }
+            for name, device_results in comparison_results.items()
+        ]
+        st.dataframe(latest_rows, use_container_width=True, hide_index=True)
+
+        has_breakdown = any(
+            device_results[-1]["breakdown"] for device_results in comparison_results.values()
+        )
+        if has_breakdown:
+            st.subheader("Latency breakdown")
+            tabs = st.tabs(selected_device_names)
+            for tab, name in zip(tabs, selected_device_names):
+                breakdown = comparison_results[name][-1]["breakdown"]
+                with tab:
+                    if breakdown:
+                        st.dataframe(
+                            [
+                                {
+                                    "Stage": stage,
+                                    "Latency (ms)": round(value * 1e3, 4),
+                                }
+                                for stage, value in breakdown
+                            ],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        render_breakdown_chart(
+                            breakdown,
+                            chart_key=f"prefill_breakdown_{name}",
+                        )
+                    else:
+                        st.info("Breakdown data is not available for this device.")
+
+        if len(sweep_values) > 1:
+            sweep_axis = (
+                "Batch size" if sweep_param == "Batch size" else "Sequence length"
             )
-            render_breakdown_chart(breakdown, chart_key="prefill_breakdown")
-        if len(results) > 1:
-            sweep_axis = "Batch size" if sweep_param == "Batch size" else "Sequence length"
+            sweep_records = []
+            for name in selected_device_names:
+                for record in comparison_results[name]:
+                    sweep_records.append(
+                        {
+                            "Device": name,
+                            sweep_axis: record[
+                                "batch_size" if sweep_param == "Batch size" else "seq_len"
+                            ],
+                            "Latency (ms)": record["latency_s"] * 1e3,
+                        }
+                    )
             fig = px.line(
-                x=[r["batch_size"] if sweep_param == "Batch size" else r["seq_len"] for r in results],
-                y=[r["latency_s"] * 1e3 for r in results],
+                sweep_records,
+                x=sweep_axis,
+                y="Latency (ms)",
+                color="Device",
                 markers=True,
                 labels={"x": sweep_axis, "y": "Latency (ms)"},
                 title=f"Latency vs. {sweep_axis}",
@@ -455,58 +520,95 @@ else:
             sweep_values_raw,
             [batch_size] if sweep_param == "Batch size" else [kv_seq_len],
         )
-        results = []
-        for value in sweep_values:
-            current_batch = value if sweep_param == "Batch size" else batch_size
-            current_kv = value if sweep_param == "KV cache length" else kv_seq_len
-            latency, breakdown = run_transformer_decode(
-                d_model=int(d_model),
-                n_heads=int(n_heads),
-                device_count=int(tp_devices),
-                batch_size=int(current_batch),
-                kv_seq_len=int(current_kv),
-                data_type_key=data_type_choice,
-                system=system,
-                attention_kernel=attention_kernel,
-                attention_mask=attention_mask,
-                attention_window=attention_window,
-            )
-            results.append(
-                {
-                    "batch_size": current_batch,
-                    "kv_seq_len": current_kv,
-                    "latency_s": latency,
-                    "breakdown": breakdown,
-                }
-            )
-        st.success(
-            f"Latest configuration latency: {results[-1]['latency_s'] * 1e3:.3f} ms"
-        )
-        breakdown = results[-1]["breakdown"]
-        if breakdown:
-            st.subheader("Latency breakdown")
-            st.dataframe(
-                [
+        comparison_results: Dict[str, List[Dict[str, object]]] = {}
+        for device_name in selected_device_names:
+            device_results: List[Dict[str, object]] = []
+            for value in sweep_values:
+                current_batch = value if sweep_param == "Batch size" else batch_size
+                current_kv = value if sweep_param == "KV cache length" else kv_seq_len
+                latency, breakdown = run_transformer_decode(
+                    d_model=int(d_model),
+                    n_heads=int(n_heads),
+                    device_count=int(tp_devices),
+                    batch_size=int(current_batch),
+                    kv_seq_len=int(current_kv),
+                    data_type_key=data_type_choice,
+                    system=systems[device_name],
+                    attention_kernel=attention_kernel,
+                    attention_mask=attention_mask,
+                    attention_window=attention_window,
+                )
+                device_results.append(
                     {
-                        "Stage": name,
-                        "Latency (ms)": round(value * 1e3, 4),
+                        "batch_size": current_batch,
+                        "kv_seq_len": current_kv,
+                        "latency_s": latency,
+                        "breakdown": breakdown,
                     }
-                    for name, value in breakdown
-                ],
-                use_container_width=True,
-                hide_index=True,
+                )
+            comparison_results[device_name] = device_results
+
+        st.success("Roofline analysis complete.")
+        latest_rows = [
+            {
+                "Device": name,
+                "Batch size": device_results[-1]["batch_size"],
+                "KV cache length": device_results[-1]["kv_seq_len"],
+                "Latency (ms)": round(device_results[-1]["latency_s"] * 1e3, 3),
+            }
+            for name, device_results in comparison_results.items()
+        ]
+        st.dataframe(latest_rows, use_container_width=True, hide_index=True)
+
+        has_breakdown = any(
+            device_results[-1]["breakdown"] for device_results in comparison_results.values()
+        )
+        if has_breakdown:
+            st.subheader("Latency breakdown")
+            tabs = st.tabs(selected_device_names)
+            for tab, name in zip(tabs, selected_device_names):
+                breakdown = comparison_results[name][-1]["breakdown"]
+                with tab:
+                    if breakdown:
+                        st.dataframe(
+                            [
+                                {
+                                    "Stage": stage,
+                                    "Latency (ms)": round(value * 1e3, 4),
+                                }
+                                for stage, value in breakdown
+                            ],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        render_breakdown_chart(
+                            breakdown,
+                            chart_key=f"decode_breakdown_{name}",
+                        )
+                    else:
+                        st.info("Breakdown data is not available for this device.")
+
+        if len(sweep_values) > 1:
+            sweep_axis = (
+                "Batch size" if sweep_param == "Batch size" else "KV cache length"
             )
-            render_breakdown_chart(breakdown, chart_key="decode_breakdown")
-        if len(results) > 1:
-            sweep_axis = "Batch size" if sweep_param == "Batch size" else "KV cache length"
+            sweep_records = []
+            for name in selected_device_names:
+                for record in comparison_results[name]:
+                    sweep_records.append(
+                        {
+                            "Device": name,
+                            sweep_axis: record[
+                                "batch_size" if sweep_param == "Batch size" else "kv_seq_len"
+                            ],
+                            "Latency (ms)": record["latency_s"] * 1e3,
+                        }
+                    )
             fig = px.line(
-                x=[
-                    r["batch_size"]
-                    if sweep_param == "Batch size"
-                    else r["kv_seq_len"]
-                    for r in results
-                ],
-                y=[r["latency_s"] * 1e3 for r in results],
+                sweep_records,
+                x=sweep_axis,
+                y="Latency (ms)",
+                color="Device",
                 markers=True,
                 labels={"x": sweep_axis, "y": "Latency (ms)"},
                 title=f"Latency vs. {sweep_axis}",

@@ -22,4 +22,9 @@ memory_module_dict = {
         memory_type="HBM3",
         bandwidth_byte_per_sec=3350e9,  # 3.35 TB/s effective HBM3 bandwidth.
     ),
+    "A110_80GB": MemoryModule(
+        80e9,
+        memory_type="HBM2e",
+        bandwidth_byte_per_sec=3350e9,
+    ),
 }

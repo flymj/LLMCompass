@@ -46,6 +46,41 @@ class Device:
         raise ValueError(f"Core {core_id} is not part of any L2 group")
 
 
+def _gbps_to_bytes_per_cycle(bandwidth_gbps: float, clock_freq_hz: float) -> int:
+    bytes_per_second = (bandwidth_gbps * 1e9) / 8.0
+    return int(bytes_per_second / clock_freq_hz)
+
+
+A110_COMPUTE = compute_module_dict.get("A110_fp16")
+if A110_COMPUTE is not None:
+    _A110_L3_BUFFER = BufferLevel(
+        size_bytes=48 * 1024**2,
+        bandwidth_per_cycle_byte=_gbps_to_bytes_per_cycle(
+            5200, A110_COMPUTE.clock_freq
+        ),
+    )
+    _A110_L2_BUFFER_BW = _gbps_to_bytes_per_cycle(2500, A110_COMPUTE.clock_freq)
+    _A110_L2_GROUPS: List[L2GroupConfig] = []
+    cores_per_group = 4
+    total_groups = (A110_COMPUTE.core_count + cores_per_group - 1) // cores_per_group
+    for group_id in range(total_groups):
+        start = group_id * cores_per_group
+        core_ids = list(range(start, min(start + cores_per_group, A110_COMPUTE.core_count)))
+        _A110_L2_GROUPS.append(
+            L2GroupConfig(
+                group_id=group_id,
+                l2_buffer=BufferLevel(
+                    size_bytes=2 * 1024**2,
+                    bandwidth_per_cycle_byte=_A110_L2_BUFFER_BW,
+                ),
+                core_ids=core_ids,
+            )
+        )
+else:
+    _A110_L3_BUFFER = None
+    _A110_L2_GROUPS = []
+
+
 device_dict = {
     "A100_80GB_fp16": Device(
         compute_module_dict["A100_fp16"],
@@ -74,5 +109,12 @@ device_dict = {
         compute_module_dict["TPUv3_new"],
         IO_module_dict["TPUv3"],
         memory_module_dict["TPUv3"],
+    ),
+    "A110": Device(
+        compute_module_dict["A110_fp16"],
+        IO_module_dict["A110"],
+        memory_module_dict["A110_80GB"],
+        l3_buffer=_A110_L3_BUFFER,
+        l2_groups=_A110_L2_GROUPS,
     ),
 }

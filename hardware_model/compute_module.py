@@ -16,6 +16,8 @@ H100_SXM80_CLOCK_HZ = 1.98e9  # SXM GPUs boost close to 1.98 GHz under load.
 H100_SXM80_VECTOR_FLOPS_PER_SM = (
     H100_SXM80_FP16_PEAK_FLOPS / (H100_SXM80_CLOCK_HZ * H100_SXM80_SM_COUNT)
 )
+A110_CLOCK_HZ = 1.5e9
+A110_CORE_COUNT = 72
 
 
 class VectorUnit:
@@ -127,6 +129,12 @@ core_dict = {
         systolic_array_dict["H100_fp16"],
         4,
         228 * 1024,  # TODO: confirm Hopper shared memory capacity per SM.
+    ),
+    "SM_A110_fp16": Core(
+        vector_unit_dict["H100_fp16"],
+        systolic_array_dict["H100_fp16"],
+        4,
+        384 * 1024,
     ),
 }
 # compute_tile_dict={'SM_A100_int8':ComputeTile(512, 4096, 192*1024*8,3.41, 'TSMC N7', 128*8),'SM_A100_fp16':ComputeTile(512, 2048, 192*1024*8,3.41, 'TSMC N7', 128),}
@@ -241,5 +249,13 @@ compute_module_dict = {
             "fp32": H100_SXM80_FP32_PEAK_FLOPS,
             "fp64": H100_SXM80_FP64_PEAK_FLOPS,
         },
+    ),
+    "A110_fp16": ComputeModule(
+        core_dict["SM_A110_fp16"],
+        A110_CORE_COUNT,
+        A110_CLOCK_HZ,
+        48 * 1024**2,
+        int(3350e9 / A110_CLOCK_HZ),
+        overhead_dict["H100"],
     ),
 }
