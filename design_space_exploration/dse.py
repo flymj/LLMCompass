@@ -1,4 +1,5 @@
-import json, re
+import json, os, re
+from copy import deepcopy
 from hardware_model.compute_module import (
     VectorUnit,
     SystolicArray,
@@ -22,7 +23,75 @@ from math import ceil
 def read_architecture_template(file_path):
     with open(file_path, "r") as f:
         arch_specs = json.load(f)
+    arch_specs = _resolve_device_specs(arch_specs, file_path)
     return arch_specs
+
+
+def _resolve_device_specs(arch_specs, template_path):
+    """Allow templates to reference reusable device definitions.
+
+    Historically every node template embedded a full `device` description,
+    which makes it tedious to explore different interconnects or device counts
+    with the same base GPU.  We now support two extra knobs:
+
+    * `device_template`: path (absolute or relative to the template file) that
+      points to a JSON blob describing a *single* device.  The blob follows the
+      same structure as the old inline `device` field.
+    * `device_overrides`: optional dict that will be recursively merged on top
+      of the resolved device specs so that callers can tweak a handful of
+      fields (e.g., `io.global_buffer_MB`) without copying the entire
+      definition.
+
+    Templates can still embed `device` inline; if both `device` and
+    `device_template` are provided, we treat the inline dict as overrides on top
+    of the referenced template.  This keeps legacy configs working while making
+    the "card -> node" mapping explicit.
+    """
+
+    hydrated_specs = deepcopy(arch_specs)
+    device_specs = hydrated_specs.pop("device", None)
+    device_template_path = hydrated_specs.pop("device_template", None)
+    device_overrides = hydrated_specs.pop("device_overrides", None)
+
+    if device_template_path:
+        resolved_path = (
+            device_template_path
+            if os.path.isabs(device_template_path)
+            else os.path.join(os.path.dirname(os.path.abspath(template_path)), device_template_path)
+        )
+        with open(resolved_path, "r") as f:
+            template_specs = json.load(f)
+        device_specs = _deep_merge_dict(template_specs, device_specs)
+
+    if device_overrides:
+        device_specs = _deep_merge_dict(device_specs, device_overrides)
+
+    if device_specs is None:
+        raise ValueError(
+            "Hardware template must define `device` inline or provide a `device_template`."
+        )
+
+    hydrated_specs["device"] = device_specs
+    return hydrated_specs
+
+
+def _deep_merge_dict(base, overrides):
+    if base is None:
+        base = {}
+    if overrides is None:
+        return deepcopy(base)
+
+    merged = deepcopy(base)
+    for key, value in overrides.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
 
 
 def template_to_system(arch_specs):

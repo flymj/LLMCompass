@@ -83,6 +83,54 @@ Most of the attributes are self-explained:
 
 ```
 
+### Reusing a Single-Card Definition Across Nodes
+
+To keep things flexible, hardware templates can now reference a reusable
+single-card description via the `device_template` field.  For example,
+[`configs/nodes/A100_4x_NVLink.json`](../configs/nodes/A100_4x_NVLink.json)
+contains only node-level parameters plus the path to
+[`configs/devices/A100_80GB_device.json`](../configs/devices/A100_80GB_device.json):
+
+```json
+{
+    "name": "NVIDIA A100(80GB) x4 (templated)",
+    "device_template": "../devices/A100_80GB_device.json",
+    "device_count": 4,
+    "interconnect": {
+        "link": { ... },
+        "link_count_per_device": 12,
+        "topology": "FC"
+    }
+}
+```
+
+If you want to tweak a few card-level knobs (e.g., enlarge the global buffer)
+without redefining the entire device, add a `device_overrides` section:
+
+```json
+{
+    "device_overrides": {
+        "io": {
+            "global_buffer_MB": 64
+        }
+    }
+}
+```
+
+LLMCompass loads the card definition, applies any optional overrides, and
+finally stitches it together with the interconnect parameters.  This mirrors
+the desired two-level hierarchy (card → node) while remaining backward
+compatible with legacy configs that inline the entire `device` object.
+
+Commonly used cards live under [`configs/devices/`](../configs/devices) so you
+can mix and match NVIDIA A100/H100/A110 and AMD MI210 descriptions when
+creating new node templates.
+
+The Streamlit dashboard (`streamlit run app.py`) exposes the same hierarchy:
+pick "Node config" in the hardware sidebar to load one or more configs from
+[`configs/nodes`](../configs/nodes). Skip this drop-down to evaluate a single
+device with a user-defined interconnect (i.e., "单机单卡").
+
 ## Step 2: Build a LLM Computational Graph
 
 Transformer blocks have been provided as in [`transformer.py`](../software_model/transformer.py), including Initial Computation (also called Prefill or Context stage) and Auto Regression (also called Decoding or Generation stage), with Tensor Parallelism support (automatically turned of if the system only has 1 device).
