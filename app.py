@@ -1,10 +1,13 @@
 """Streamlit dashboard for exploring LLMCompass hardware/software combinations."""
 from __future__ import annotations
 
+from dataclasses import dataclass
+from math import inf, isfinite
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from design_space_exploration.dse import (
@@ -26,6 +29,7 @@ from software_model.transformer import (
     TransformerBlockAutoRegressionTP,
     TransformerBlockInitComputationTP,
 )
+from software_model.operators import Operator
 from software_model.utils import Tensor, data_type_dict
 
 st.set_page_config(page_title="LLMCompass Explorer", layout="wide")
@@ -58,6 +62,25 @@ ATTENTION_MASK_OPTIONS = {
     "Full": "full",
     "Sliding window": "sliding_window",
 }
+
+
+@dataclass
+class RooflinePoint:
+    flop_count: float
+    io_bytes: float
+    latency_s: float
+
+    @property
+    def arithmetic_intensity(self) -> float:
+        if self.io_bytes == 0:
+            return inf
+        return self.flop_count / self.io_bytes
+
+    @property
+    def achieved_performance(self) -> float:
+        if self.latency_s == 0:
+            return 0.0
+        return self.flop_count / self.latency_s
 
 
 def resolve_module_name(target, registry: Dict[str, object]) -> str:
@@ -120,6 +143,22 @@ def parse_int_list(raw: str, fallback: Sequence[int]) -> List[int]:
     return values or list(fallback)
 
 
+def collect_roofline_point(model: object, latency_s: float) -> RooflinePoint | None:
+    data_type = getattr(model, "data_type", None)
+    bytes_per_elem = getattr(data_type, "word_size", None)
+    if not bytes_per_elem:
+        return None
+    total_flops = 0.0
+    total_io_elems = 0.0
+    for value in vars(model).values():
+        if isinstance(value, Operator):
+            total_flops += float(getattr(value, "flop_count", 0.0) or 0.0)
+            total_io_elems += float(getattr(value, "io_count", 0.0) or 0.0)
+    if total_flops == 0 and total_io_elems == 0:
+        return None
+    return RooflinePoint(total_flops, total_io_elems * bytes_per_elem, latency_s)
+
+
 def build_system(device: Device, interconnect: InterConnectModule) -> System:
     return System(device, interconnect)
 
@@ -168,6 +207,143 @@ def render_breakdown_chart(
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 
+def render_sweep_chart(records: List[Dict[str, object]], sweep_axis: str, *, chart_key: str) -> None:
+    if not records:
+        return
+    unique_positions = {record[sweep_axis] for record in records}
+    if len(unique_positions) > 1:
+        fig = px.line(
+            records,
+            x=sweep_axis,
+            y="Latency (ms)",
+            color="Device",
+            markers=True,
+            labels={"x": sweep_axis, "y": "Latency (ms)"},
+            title=f"Latency vs. {sweep_axis}",
+        )
+    else:
+        fig = px.scatter(
+            records,
+            x=sweep_axis,
+            y="Latency (ms)",
+            color="Device",
+            labels={"x": sweep_axis, "y": "Latency (ms)"},
+            title=f"Latency vs. {sweep_axis}",
+        )
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
+
+
+def build_roofline_figure(
+    *, device_name: str, device: Device, point: RooflinePoint
+) -> go.Figure | None:
+    if not point or point.flop_count <= 0:
+        return None
+    peak_compute = max(
+        device.compute_module.total_systolic_array_flops,
+        device.compute_module.total_vector_flops,
+    )
+    memory_bandwidth = min(
+        device.io_module.bandwidth,
+        device.global_buffer_bandwidth_per_cycle * device.compute_module.clock_freq,
+    )
+    achieved_perf = point.achieved_performance
+    if peak_compute <= 0 or memory_bandwidth <= 0 or achieved_perf <= 0:
+        return None
+
+    intersection_intensity = peak_compute / memory_bandwidth
+    intensity = point.arithmetic_intensity
+    finite_intensity = intensity if isfinite(intensity) and intensity > 0 else None
+    candidates = [value for value in (finite_intensity, intersection_intensity) if value and value > 0]
+    x_min = min(candidates) / 10 if candidates else 1e-3
+    x_max = max(candidates) * 10 if candidates else 1e3
+    x_min = max(x_min, 1e-3)
+    x_max = max(x_max, x_min * 10)
+
+    diag_start = x_min
+    diag_end = min(intersection_intensity, x_max) if intersection_intensity > 0 else 0
+    diag_trace = None
+    if diag_end > diag_start:
+        diag_trace = go.Scatter(
+            x=[diag_start, diag_end],
+            y=[
+                (memory_bandwidth * diag_start) / 1e12,
+                (memory_bandwidth * diag_end) / 1e12,
+            ],
+            mode="lines",
+            name="Memory roof",
+        )
+
+    compute_start = max(diag_end, x_min)
+    compute_trace = go.Scatter(
+        x=[compute_start, x_max],
+        y=[peak_compute / 1e12, peak_compute / 1e12],
+        mode="lines",
+        name="Compute roof",
+    )
+
+    point_intensity = finite_intensity if finite_intensity else x_max
+    point_trace = go.Scatter(
+        x=[point_intensity],
+        y=[achieved_perf / 1e12],
+        mode="markers",
+        marker=dict(size=10),
+        name="Workload",
+        hovertemplate=(
+            f"Device: {device_name}<br>Arithmetic intensity: {intensity:.3e} FLOP/B"
+            if finite_intensity
+            else f"Device: {device_name}<br>Arithmetic intensity: ∞ FLOP/B"
+        )
+        + "<br>Performance: %{y:.3f} TFLOP/s",
+    )
+
+    fig = go.Figure()
+    if diag_trace:
+        fig.add_trace(diag_trace)
+    fig.add_trace(compute_trace)
+    fig.add_trace(point_trace)
+    fig.update_layout(
+        title=f"{device_name} roofline placement",
+        xaxis_type="log",
+        yaxis_type="log",
+        xaxis_title="Arithmetic intensity (FLOP/byte)",
+        yaxis_title="Performance (TFLOP/s)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
+def render_roofline_section(
+    *,
+    comparison_results: Dict[str, List[Dict[str, object]]],
+    device_names: Sequence[str],
+    systems: Dict[str, System],
+    chart_prefix: str,
+) -> None:
+    has_points = any(
+        device_results and device_results[-1].get("roofline_point")
+        for device_results in comparison_results.values()
+    )
+    if not has_points:
+        return
+    st.subheader("Roofline placement")
+    for idx, name in enumerate(device_names):
+        if name not in comparison_results:
+            continue
+        latest = comparison_results[name][-1]
+        point: RooflinePoint | None = latest.get("roofline_point")  # type: ignore[assignment]
+        if not point:
+            continue
+        figure = build_roofline_figure(
+            device_name=name, device=systems[name].device, point=point
+        )
+        if figure:
+            st.plotly_chart(
+                figure,
+                use_container_width=True,
+                key=f"roofline_{chart_prefix}_{idx}",
+            )
+
+
 def summarize_hardware(device: Device) -> None:
     compute_summary = describe_compute_module(device.compute_module)
     memory_summary = describe_memory_module(device.memory_module)
@@ -199,7 +375,7 @@ def run_transformer_prefill(
     attention_kernel: str,
     attention_mask: str,
     attention_window: int | None,
-) -> Tuple[float, List[Tuple[str, float]]]:
+) -> Tuple[float, List[Tuple[str, float]], RooflinePoint | None]:
     data_type = data_type_dict[data_type_key]
     model = TransformerBlockInitComputationTP(
         d_model=d_model,
@@ -213,7 +389,8 @@ def run_transformer_prefill(
     _ = model(Tensor([batch_size, seq_len, d_model], data_type))
     latency = model.roofline_model(system)
     breakdown = parse_transformer_breakdown(getattr(model, "roofline_log", None))
-    return latency, breakdown
+    point = collect_roofline_point(model, latency)
+    return latency, breakdown, point
 
 
 def run_transformer_decode(
@@ -228,7 +405,7 @@ def run_transformer_decode(
     attention_kernel: str,
     attention_mask: str,
     attention_window: int | None,
-) -> Tuple[float, List[Tuple[str, float]]]:
+) -> Tuple[float, List[Tuple[str, float]], RooflinePoint | None]:
     data_type = data_type_dict[data_type_key]
     model = TransformerBlockAutoRegressionTP(
         d_model=d_model,
@@ -242,7 +419,8 @@ def run_transformer_decode(
     _ = model(Tensor([batch_size, 1, d_model], data_type), kv_seq_len)
     latency = model.roofline_model(system)
     breakdown = parse_transformer_breakdown(getattr(model, "roofline_log", None))
-    return latency, breakdown
+    point = collect_roofline_point(model, latency)
+    return latency, breakdown, point
 
 
 st.title("LLMCompass interactive explorer")
@@ -473,7 +651,7 @@ if software_choice == "Transformer (prefill)":
             for value in sweep_values:
                 current_batch = value if sweep_param == "Batch size" else batch_size
                 current_seq = value if sweep_param == "Sequence length" else seq_len
-                latency, breakdown = run_transformer_prefill(
+                latency, breakdown, point = run_transformer_prefill(
                     d_model=int(d_model),
                     n_heads=int(n_heads),
                     device_count=int(tp_devices),
@@ -491,6 +669,7 @@ if software_choice == "Transformer (prefill)":
                         "seq_len": current_seq,
                         "latency_s": latency,
                         "breakdown": breakdown,
+                        "roofline_point": point,
                     }
                 )
             comparison_results[device_name] = device_results
@@ -541,7 +720,14 @@ if software_choice == "Transformer (prefill)":
                     chart_key="prefill_breakdown_grouped",
                 )
 
-        if len(sweep_values) > 1:
+        render_roofline_section(
+            comparison_results=comparison_results,
+            device_names=selected_device_names,
+            systems=systems,
+            chart_prefix="prefill",
+        )
+
+        if sweep_param != "None":
             sweep_axis = (
                 "Batch size" if sweep_param == "Batch size" else "Sequence length"
             )
@@ -557,16 +743,11 @@ if software_choice == "Transformer (prefill)":
                             "Latency (ms)": record["latency_s"] * 1e3,
                         }
                     )
-            fig = px.line(
+            render_sweep_chart(
                 sweep_records,
-                x=sweep_axis,
-                y="Latency (ms)",
-                color="Device",
-                markers=True,
-                labels={"x": sweep_axis, "y": "Latency (ms)"},
-                title=f"Latency vs. {sweep_axis}",
+                sweep_axis,
+                chart_key="prefill_sweep",
             )
-            st.plotly_chart(fig, use_container_width=True, key="prefill_sweep")
 
 else:
     d_model = st.number_input("Hidden size (d_model)", 128, 262144, 12288, 128)
@@ -604,7 +785,7 @@ else:
             for value in sweep_values:
                 current_batch = value if sweep_param == "Batch size" else batch_size
                 current_kv = value if sweep_param == "KV cache length" else kv_seq_len
-                latency, breakdown = run_transformer_decode(
+                latency, breakdown, point = run_transformer_decode(
                     d_model=int(d_model),
                     n_heads=int(n_heads),
                     device_count=int(tp_devices),
@@ -622,6 +803,7 @@ else:
                         "kv_seq_len": current_kv,
                         "latency_s": latency,
                         "breakdown": breakdown,
+                        "roofline_point": point,
                     }
                 )
             comparison_results[device_name] = device_results
@@ -672,7 +854,14 @@ else:
                     chart_key="decode_breakdown_grouped",
                 )
 
-        if len(sweep_values) > 1:
+        render_roofline_section(
+            comparison_results=comparison_results,
+            device_names=selected_device_names,
+            systems=systems,
+            chart_prefix="decode",
+        )
+
+        if sweep_param != "None":
             sweep_axis = (
                 "Batch size" if sweep_param == "Batch size" else "KV cache length"
             )
@@ -688,13 +877,8 @@ else:
                             "Latency (ms)": record["latency_s"] * 1e3,
                         }
                     )
-            fig = px.line(
+            render_sweep_chart(
                 sweep_records,
-                x=sweep_axis,
-                y="Latency (ms)",
-                color="Device",
-                markers=True,
-                labels={"x": sweep_axis, "y": "Latency (ms)"},
-                title=f"Latency vs. {sweep_axis}",
+                sweep_axis,
+                chart_key="decode_sweep",
             )
-            st.plotly_chart(fig, use_container_width=True, key="decode_sweep")
